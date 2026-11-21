@@ -1,0 +1,145 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<jtlshopplugin>
+    <Name>W System E-Invoice</Name>
+    <Description>Create, validate and send XRechnung 3.0 / EN 16931 / Peppol BIS e-invoices from JTL-Shop orders. Validates received invoices too.</Description>
+    <Author>W System</Author>
+    <URL>https://wsystem.dev/jtl-xrechnung</URL>
+    <XMLVersion>100</XMLVersion>
+    <ShopVersion>5.2.0</ShopVersion>
+    <PluginID>wsystem_einvoice</PluginID>
+    <Version>0.1.0</Version>
+    <CreateDate>2026-11-21</CreateDate>
+    <License>MIT</License>
+    <Descriptions>
+        <Description language="ger">XRechnung 3.0, EN 16931 und Peppol-BIS-E-Rechnungen aus JTL-Shop-Bestellungen erzeugen, prüfen und versenden. Prüft auch empfangene Rechnungen.</Description>
+        <Description language="eng">Create, validate and send XRechnung 3.0 / EN 16931 / Peppol BIS e-invoices from JTL-Shop orders. Validates received invoices too.</Description>
+    </Descriptions>
+    <PluginBootstrap>Bootstrap.php</PluginBootstrap>
+    <Install>
+        <Adminmenu>
+            <Customlink sort="1">
+                <Name>E-Invoices</Name>
+                <Filename>invoices.php</Filename>
+            </Customlink>
+            <Settingslink sort="2">
+                <Name>Settings</Name>
+<Setting type="text" conf="Y" initialValue="" sort="1">
+<Name>API key (optional)</Name>
+<Description>Free API key from wsystem.dev for a higher quota. Leave empty to use the free daily quota.</Description>
+<ValueName>apiKey</ValueName>
+</Setting>
+<Setting type="selectbox" conf="Y" initialValue="xrechnung" sort="2">
+<Name>Format</Name>
+<Description>Output format of the e-invoice.</Description>
+<ValueName>format</ValueName>
+<SelectboxOptions><Option sort="1" value="xrechnung">XRechnung 3.0 (UBL), Germany</Option><Option sort="2" value="en16931">EN 16931 (UBL), EU standard</Option><Option sort="3" value="peppol-bis3">Peppol BIS Billing 3.0 (UBL)</Option></SelectboxOptions>
+</Setting>
+<Setting type="selectbox" conf="Y" initialValue="on_shipped" sort="3">
+<Name>Create automatically</Name>
+<Description>When the e-invoice is created. JTL-Wawi pushes the status to the shop.</Description>
+<ValueName>trigger</ValueName>
+<SelectboxOptions><Option sort="1" value="on_shipped">When order is shipped</Option><Option sort="2" value="on_paid">When order is paid</Option><Option sort="3" value="off">Manual only</Option></SelectboxOptions>
+</Setting>
+<Setting type="radio" conf="Y" initialValue="Y" sort="4">
+<Name>Business customers only</Name>
+<Description>Only create automatically for customers with a company name or VAT ID.</Description>
+<ValueName>b2bOnly</ValueName>
+<RadioOptions><Option sort="1" value="Y">Yes</Option><Option sort="2" value="N">No</Option></RadioOptions>
+</Setting>
+<Setting type="selectbox" conf="Y" initialValue="off" sort="5">
+<Name>Peppol sending</Name>
+<Description>Sandbox simulates and delivers nothing. Live delivers over the Peppol network.</Description>
+<ValueName>peppolMode</ValueName>
+<SelectboxOptions><Option sort="1" value="off">Off</Option><Option sort="2" value="sandbox">Sandbox (nothing delivered)</Option><Option sort="3" value="live">Live</Option></SelectboxOptions>
+</Setting>
+<Setting type="radio" conf="Y" initialValue="N" sort="6">
+<Name>Send over Peppol automatically</Name>
+<Description>Send automatically after a valid e-invoice (business customers).</Description>
+<ValueName>peppolAuto</ValueName>
+<RadioOptions><Option sort="1" value="Y">Yes</Option><Option sort="2" value="N">No</Option></RadioOptions>
+</Setting>
+<Setting type="radio" conf="Y" initialValue="N" sort="7">
+<Name>Small business (section 19 UStG)</Name>
+<Description>No VAT charged. Adds the exemption reason.</Description>
+<ValueName>smallBusiness</ValueName>
+<RadioOptions><Option sort="1" value="Y">Yes</Option><Option sort="2" value="N">No</Option></RadioOptions>
+</Setting>
+<Setting type="text" conf="Y" initialValue="" sort="8">
+<Name>Default Leitweg-ID / buyer reference</Name>
+<Description>Used when the order has no buyer reference. Leave empty to use the order number.</Description>
+<ValueName>leitwegId</ValueName>
+</Setting>
+<Setting type="text" conf="Y" initialValue="" sort="9">
+<Name>Payment terms</Name>
+<Description>Text for unpaid invoices, e.g. Payable within 14 days.</Description>
+<ValueName>paymentTerms</ValueName>
+</Setting>
+<Setting type="text" conf="Y" initialValue="" sort="20">
+<Name>Company name</Name>
+<Description>Your legal company name.</Description>
+<ValueName>sellerName</ValueName>
+</Setting>
+<Setting type="text" conf="Y" initialValue="" sort="21">
+<Name>Street and number</Name>
+<Description></Description>
+<ValueName>sellerStreet</ValueName>
+</Setting>
+<Setting type="text" conf="Y" initialValue="" sort="22">
+<Name>Postal code</Name>
+<Description></Description>
+<ValueName>sellerPostcode</ValueName>
+</Setting>
+<Setting type="text" conf="Y" initialValue="" sort="23">
+<Name>City</Name>
+<Description></Description>
+<ValueName>sellerCity</ValueName>
+</Setting>
+<Setting type="text" conf="Y" initialValue="DE" sort="24">
+<Name>Country (ISO code)</Name>
+<Description>Two-letter code, for example DE.</Description>
+<ValueName>sellerCountry</ValueName>
+</Setting>
+<Setting type="text" conf="Y" initialValue="" sort="25">
+<Name>Email</Name>
+<Description>XRechnung needs a seller contact email.</Description>
+<ValueName>sellerEmail</ValueName>
+</Setting>
+<Setting type="text" conf="Y" initialValue="" sort="26">
+<Name>Phone</Name>
+<Description>XRechnung needs a seller contact phone.</Description>
+<ValueName>sellerPhone</ValueName>
+</Setting>
+<Setting type="text" conf="Y" initialValue="" sort="27">
+<Name>Contact name</Name>
+<Description>XRechnung needs a seller contact name.</Description>
+<ValueName>sellerContact</ValueName>
+</Setting>
+<Setting type="text" conf="Y" initialValue="" sort="28">
+<Name>VAT ID</Name>
+<Description>For example DE123456789.</Description>
+<ValueName>sellerVatId</ValueName>
+</Setting>
+<Setting type="text" conf="Y" initialValue="" sort="29">
+<Name>Tax number</Name>
+<Description>Optional, when you have no VAT ID.</Description>
+<ValueName>sellerTaxNo</ValueName>
+</Setting>
+<Setting type="text" conf="Y" initialValue="" sort="30">
+<Name>Commercial register no.</Name>
+<Description>Optional.</Description>
+<ValueName>sellerRegNo</ValueName>
+</Setting>
+<Setting type="text" conf="Y" initialValue="" sort="31">
+<Name>IBAN</Name>
+<Description>Shown on invoices paid by bank transfer.</Description>
+<ValueName>sellerIban</ValueName>
+</Setting>
+<Setting type="text" conf="Y" initialValue="" sort="32">
+<Name>BIC</Name>
+<Description>Optional.</Description>
+<ValueName>sellerBic</ValueName>
+</Setting>
+            </Settingslink>
+        </Adminmenu>
+    </Install>
+</jtlshopplugin>
