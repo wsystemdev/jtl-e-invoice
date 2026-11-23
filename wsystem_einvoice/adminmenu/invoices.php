@@ -21,6 +21,27 @@ $msg = '';
 
 if (isset($_GET['wsei_dl']) && Form::validateToken()) {
     $rec = $store->get((int) $_GET['wsei_dl']);
+    $cn = isset($_GET['cn']) ? ((array) ($rec['credit_notes'] ?? []))[(int) $_GET['cn']] ?? null : null;
+    $src = $cn ?? $rec;
+    $isPdf = ($_GET['f'] ?? '') === 'pdf' && !empty($src['pdf']);
+    if (!empty($src['xml']) && $isPdf) {
+        while (ob_get_level() > 0) {
+            ob_end_clean();
+        }
+        header('Content-Type: application/pdf');
+        header('Content-Disposition: attachment; filename="' . preg_replace('/[^A-Za-z0-9._-]/', '_', (string) ($src['number'] ?? 'e-invoice')) . '.pdf"');
+        echo base64_decode((string) $src['pdf'], true);
+        exit;
+    }
+    if ($cn !== null && !empty($cn['xml'])) {
+        while (ob_get_level() > 0) {
+            ob_end_clean();
+        }
+        header('Content-Type: application/xml; charset=utf-8');
+        header('Content-Disposition: attachment; filename="' . preg_replace('/[^A-Za-z0-9._-]/', '_', (string) $cn['number']) . '.xml"');
+        echo $cn['xml'];
+        exit;
+    }
     if (!empty($rec['xml'])) {
         while (ob_get_level() > 0) {
             ob_end_clean();
@@ -48,6 +69,11 @@ if (($_POST['wsei_action'] ?? '') !== '' && Form::validateToken()) {
             $order = OrderAdapter::fromBestellung($full);
             if ($act === 'send') {
                 $msg = $h($svc->send($order)['message']);
+            } elseif ($act === 'credit') {
+                // manual credit note for a cancelled / returned order (whole order). Needs the option "Create credit notes" and a valid e-invoice.
+                $r = $svc->creditNote($order, 'manual-' . date('YmdHis'));
+                $msg = $r['skipped'] ? 'No credit note created: the option is off, the order has no valid e-invoice, or it was already credited.'
+                    : ($r['valid'] ? 'Credit note created and passed validation.' : $h($r['error'] ?: count($r['errors']) . ' validation error(s) in the credit note.'));
             } else {
                 $r = $svc->generate($order);
                 $msg = $r['valid'] ? 'E-invoice created and passed validation.' : $h($r['error'] ?: count($r['errors']) . ' validation error(s), see list.');
@@ -63,7 +89,8 @@ if ($msg !== '') {
 echo '<h4>Create e-invoice for an order</h4><form method="post">' . $tok
     . '<input class="form-control mb-2" name="wsei_order" placeholder="Order number (Bestellnummer)">'
     . '<button class="btn btn-primary" name="wsei_action" value="create">Create and validate</button> '
-    . '<button class="btn btn-secondary" name="wsei_action" value="send">Send over Peppol</button></form>';
+    . '<button class="btn btn-secondary" name="wsei_action" value="send">Send over Peppol</button> '
+    . '<button class="btn btn-outline-secondary" name="wsei_action" value="credit">Create credit note (cancellation / return)</button></form>';
 echo '<h4 class="mt-4">Check a received invoice</h4><p>Checks a supplier XML (EN16931 / XRechnung rules, VIES, sanctions, bank-detail changes). Uses 5 units per check.</p>'
     . '<form method="post" enctype="multipart/form-data">' . $tok . '<input type="file" name="wsei_xml" class="mb-2"><br>'
     . '<button class="btn btn-secondary" name="wsei_action" value="check">Check invoice</button></form>';
@@ -71,6 +98,10 @@ echo '<h4 class="mt-4">Recent e-invoices</h4><table class="table table-sm"><tr><
 foreach ($store->recent() as $id => $r) {
     echo '<tr><td>' . $id . '</td><td>' . $h($r['number'] ?? '') . '</td><td>' . $h($r['format'] ?? '') . '</td><td>' . (!empty($r['valid']) ? 'yes' : 'no') . '</td><td>'
         . $h(isset($r['errors']) ? implode('; ', array_map(static fn ($e) => $e['rule_id'] . ' ' . $e['fix'], $r['errors'])) : ($r['last_error'] ?? '')) . '</td><td>'
-        . $h($r['peppol']['status'] ?? '') . '</td><td>' . (!empty($r['xml']) ? '<a href="?wsei_dl=' . $id . '&jtl_token=' . $h($_SESSION['jtl_token'] ?? '') . '">XML</a>' : '') . '</td></tr>';
+        . $h($r['peppol']['status'] ?? '') . '</td><td>' . (!empty($r['xml']) ? '<a href="?wsei_dl=' . $id . '&jtl_token=' . $h($_SESSION['jtl_token'] ?? '') . '">XML</a>' : '')
+        . (!empty($r['pdf']) ? ' <a href="?wsei_dl=' . $id . '&f=pdf&jtl_token=' . $h($_SESSION['jtl_token'] ?? '') . '">PDF</a>' : '')
+        . implode('', array_map(static fn ($c, $i) => empty($c['valid']) ? '' : ' <a href="?wsei_dl=' . $id . '&cn=' . $i . '&jtl_token=' . $h($_SESSION['jtl_token'] ?? '') . '">' . $h($c['number']) . ' XML</a>'
+            . (empty($c['pdf']) ? '' : ' <a href="?wsei_dl=' . $id . '&cn=' . $i . '&f=pdf&jtl_token=' . $h($_SESSION['jtl_token'] ?? '') . '">PDF</a>'), (array) ($r['credit_notes'] ?? []), array_keys((array) ($r['credit_notes'] ?? []))))
+        . '</td></tr>';
 }
 echo '</table></div></div>';

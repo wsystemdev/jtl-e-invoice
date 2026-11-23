@@ -39,8 +39,71 @@ final class Service
         $this->store->save((int) $order['id'], [
             'xml' => (string) ($d['xml'] ?? ''), 'valid' => $valid, 'errors' => $errors, 'format' => $body['format'],
             'number' => $body['invoice_number'], 'totals' => $totals, 'mismatch' => $mismatch, 'last_error' => '',
+            'pdf' => ($valid && $body['format'] === 'zugferd' && !empty($d['pdf_base64'])) ? (string) $d['pdf_base64'] : '',
+            'created' => gmdate('c'),
         ]);
         return ['valid' => $valid, 'error' => '', 'errors' => $errors, 'skipped' => false];
+    }
+
+    /**
+     * Whether a credit note with this key should be created: option on, a valid e-invoice exists, the key is new, and a whole-order
+     * credit note ($full) is not created twice (cancellation and later refund must not both credit the order).
+     * @param array<string,mixed> $order
+     */
+    public function shouldCredit(array $order, string $key, bool $full = true): bool
+    {
+        if (($this->cfg['creditNotes'] ?? 'N') !== 'Y') {
+            return false;
+        }
+        $rec = $this->store->get((int) $order['id']);
+        if (empty($rec['valid']) || empty($rec['xml'])) {
+            return false;
+        }
+        foreach ((array) ($rec['credit_notes'] ?? []) as $cn) {
+            if (($cn['key'] ?? '') === $key || ($full && !empty($cn['full']) && !empty($cn['valid']))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Credit note for a cancelled / returned order (whole order, or $refundLines).
+     * @param array<string,mixed> $order @param array<int,array<string,mixed>>|null $refundLines
+     * @return array{valid:bool,error:string,errors:array<int,array<string,string>>,skipped:bool}
+     */
+    public function creditNote(array $order, string $key = 'order-cancelled', ?array $refundLines = null): array
+    {
+        $full = $refundLines === null;
+        if (!$this->shouldCredit($order, $key, $full)) {
+            return ['valid' => false, 'error' => '', 'errors' => [], 'skipped' => true];
+        }
+        $rec = $this->store->get((int) $order['id']);
+        $origDate = substr((string) ($rec['created'] ?? ''), 0, 10) ?: (string) ($order['delivery_date'] ?? '') ?: date('Y-m-d');
+        $body = Mapper::creditNote($order, $this->cfg, $key, (string) ($rec['number'] ?? $order['number']), $origDate, $refundLines);
+        if (!$body['lines']) {
+            return ['valid' => false, 'error' => '', 'errors' => [], 'skipped' => true];
+        }
+        $res = $this->api->post('/einvoice/create', $body);
+        $e = ['key' => $key, 'full' => $full, 'number' => $body['invoice_number'], 'original' => (string) ($rec['number'] ?? $order['number']),
+            'created' => gmdate('c'), 'valid' => false, 'xml' => '', 'pdf' => '', 'errors' => [], 'last_error' => ''];
+        if (!$res['ok']) {
+            $e['last_error'] = $res['error'];
+        } else {
+            $d = $res['data'];
+            $e['valid'] = !empty($d['valid']);
+            foreach ((isset($d['errors']) && is_array($d['errors'])) ? $d['errors'] : [] as $er) {
+                $e['errors'][] = ['rule_id' => (string) ($er['rule_id'] ?? ''), 'message' => (string) ($er['explain']['what'] ?? $er['message'] ?? ''), 'fix' => (string) ($er['explain']['fix'] ?? $er['fix'] ?? '')];
+            }
+            if ($e['valid']) {
+                $e['xml'] = (string) ($d['xml'] ?? '');
+                $e['pdf'] = ($body['format'] === 'zugferd' && !empty($d['pdf_base64'])) ? (string) $d['pdf_base64'] : '';
+            }
+        }
+        $list = array_values(array_filter((array) ($rec['credit_notes'] ?? []), static fn ($c) => ($c['key'] ?? '') !== $key));
+        $list[] = $e;
+        $this->store->save((int) $order['id'], ['credit_notes' => $list]);
+        return ['valid' => $e['valid'], 'error' => $e['last_error'], 'errors' => $e['errors'], 'skipped' => false];
     }
 
     /** @param array<string,mixed> $order @return array{ok:bool,message:string} */

@@ -7,7 +7,7 @@
     <XMLVersion>100</XMLVersion>
     <ShopVersion>5.2.0</ShopVersion>
     <PluginID>wsystem_einvoice</PluginID>
-    <Version>0.1.0</Version>
+    <Version>0.2.0</Version>
     <CreateDate>2026-11-21</CreateDate>
     <License>MIT</License>
     <Descriptions>
@@ -33,6 +33,18 @@
 <Description>Output format of the e-invoice.</Description>
 <ValueName>format</ValueName>
 <SelectboxOptions><Option sort="1" value="xrechnung">XRechnung 3.0 (UBL), Germany</Option><Option sort="2" value="en16931">EN 16931 (UBL), EU standard</Option><Option sort="3" value="peppol-bis3">Peppol BIS Billing 3.0 (UBL)</Option></SelectboxOptions>
+</Setting>
+<Setting type="radio" conf="Y" initialValue="N" sort="2">
+<Name>ZUGFeRD / Factur-X PDF (new, off by default)</Name>
+<Description>Create a ZUGFeRD / Factur-X PDF (EN 16931) instead of XML only. Not used with Peppol BIS. JTL-Wawi has its own ZUGFeRD export: turn this on only if you do not send Wawi's ZUGFeRD to the same customers, to avoid two invoices per order.</Description>
+<ValueName>zugferd</ValueName>
+<RadioOptions><Option sort="1" value="Y">Yes</Option><Option sort="2" value="N">No</Option></RadioOptions>
+</Setting>
+<Setting type="radio" conf="Y" initialValue="N" sort="2">
+<Name>Create credit notes (new, off by default)</Name>
+<Description>Create a credit note (type 381, referencing the original e-invoice) when JTL-Wawi pushes the status "cancelled" to the shop, or manually from the E-Invoices tab for returns. Only for orders that already have a valid e-invoice.</Description>
+<ValueName>creditNotes</ValueName>
+<RadioOptions><Option sort="1" value="Y">Yes</Option><Option sort="2" value="N">No</Option></RadioOptions>
 </Setting>
 <Setting type="selectbox" conf="Y" initialValue="on_shipped" sort="3">
 <Name>Create automatically</Name>

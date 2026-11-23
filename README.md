@@ -13,6 +13,12 @@ JTL-Wawi (1.9.x) already exports XRechnung 3.0.x and ZUGFeRD from its own invoic
 - **Counterparty checks on received invoices** (`POST /einvoice/check`): paste or upload a supplier XML in the admin and get a verdict (rules, VIES name match, sanctions, totals, IBAN, duplicates, bank-detail changes).
 - Works from **JTL-Shop orders** (Hook 181, status pushed by JTL-Wawi), no template editing.
 
+## New in 0.2.0 (both options OFF by default)
+
+- **Credit notes** (EN 16931 type 381, `preceding_invoice` and `preceding_invoice_date` of the original e-invoice): created automatically when JTL-Wawi pushes the status "cancelled" to the shop (Hook 181, status -1), or manually for returns from the "E-Invoices" tab ("Create credit note"). Only for orders that already have a valid e-invoice; one whole-order credit note per order. Partial returns are supported by the service and API call, but the shop has no returns hook in this plugin yet, so they are not triggered automatically.
+- **ZUGFeRD / Factur-X PDF** (EN 16931, PDF/A-3b with the XML embedded) instead of XML only, downloadable from the "E-Invoices" tab. JTL-Wawi has its own ZUGFeRD export: switch this on only if you do not send Wawi's ZUGFeRD to the same customers, otherwise each order gets two invoices.
+- Credit notes follow the format setting (a ZUGFeRD PDF credit note when ZUGFeRD is on).
+
 ## Requirements
 
 JTL-Shop 5.2.0+, PHP 8.1+, PHP curl extension. No account needed (20 invoices/day without key); optional free API key at https://wsystem.dev/account.
@@ -30,7 +36,7 @@ On creation the order's invoice data goes to `https://api.wsystem.dev/einvoice/c
 
 ## Status
 
-Version 0.1.0. The order mapping and API logic are unit tested (`php tests/run.php`) and the request shape is the same as the W System WooCommerce plugin. It has been written against the JTL-Shop 5 plugin API and the `Bestellung` object, but not yet run inside a live JTL-Shop: please report problems. Not in this version: attaching the XML to JTL-Shop emails, ZUGFeRD PDF output, credit notes.
+Version 0.2.0. **Credit notes and ZUGFeRD are only unit-tested** (no JTL-Shop was available): the mapping, the stored records, the API request shape (checked against the real W System API logic) and the on/off behaviour are tested with `php tests/run.php`; the Hook 181 status -1 handling, the admin tab buttons and downloads, and the settings screen have never run inside a real JTL-Shop. Version 0.1.0 was likewise unit-tested only. The order mapping and API logic are unit tested (`php tests/run.php`) and the request shape is the same as the W System WooCommerce plugin. It has been written against the JTL-Shop 5 plugin API and the `Bestellung` object, but not yet run inside a live JTL-Shop: please report problems. Not in this version: attaching the XML to JTL-Shop emails, ZUGFeRD PDF output, credit notes.
 
 ## Deutsch
 

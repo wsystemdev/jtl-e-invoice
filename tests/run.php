@@ -82,6 +82,57 @@ ok(!(new Service(new Api('', 'x', fn () => [200, '{}']), $st, $cfg))->generate([
 $net = (new Service(new Api('', 'x', function () { throw new RuntimeException('boom'); }), $st, $cfg))->generate($order);
 ok($net['error'] === 'boom', 'network error');
 
+
+// ---- 0.2.0: ZUGFeRD option + credit notes (both off by default) ----
+ok(Mapper::formatFor($cfg) === 'xrechnung' && Mapper::invoice($order, $cfg)['format'] === 'xrechnung', 'zugferd off by default: format unchanged');
+ok(Mapper::formatFor($cfg + ['zugferd' => 'N']) === 'xrechnung', 'zugferd N');
+ok(Mapper::formatFor(['zugferd' => 'Y'] + $cfg) === 'zugferd' && Mapper::formatFor(['zugferd' => 'Y', 'format' => 'en16931'] + $cfg) === 'zugferd', 'zugferd Y switches format');
+ok(Mapper::formatFor(['zugferd' => 'Y', 'format' => 'peppol-bis3'] + $cfg) === 'peppol-bis3', 'zugferd never replaces Peppol BIS');
+ok(Mapper::invoice($order, ['zugferd' => 'Y'] + $cfg, 'peppol-bis3')['format'] === 'peppol-bis3', 'explicit format wins (Peppol send)');
+
+$paidOrder = OrderAdapter::fromBestellung(bestellung(['dBezahltDatum' => '2026-11-21', 'cZahlungsartName' => 'PayPal']));
+$cn = Mapper::creditNote($paidOrder + ['today' => '2026-11-22'], $cfg, 'order-cancelled', 'RE-77', '2026-11-20');
+ok($cn['type_code'] === '381' && $cn['preceding_invoice'] === 'RE-77' && $cn['preceding_invoice_date'] === '2026-11-20', 'credit note references original');
+ok(!isset($cn['prepaid_amount']) && $cn['invoice_number'] === 'CN-AU-2026-7-ancelled' && $cn['issue_date'] === '2026-11-22', 'credit note number, no prepaid');
+ok($cn['payment']['means_code'] === '58' && $cn['payment']['iban'] === 'DE02120300000000202051', 'credit note payment with IBAN (BR-61)');
+$cn2 = Mapper::creditNote($order, ['sellerIban' => ''] + $cfg, 'k', 'RE-1', '2026-11-20');
+ok($cn2['payment']['means_code'] === '1' && !isset($cn2['payment']['iban']), 'credit note payment without IBAN');
+$part = Mapper::creditNote($order, $cfg, 'ret-1', 'RE-1', '2026-11-20', [['name' => 'Widget', 'sku' => 'W-1', 'qty' => 1.0, 'unit_net' => 33.333333, 'vat_rate' => 19.0, 'type' => 'item']]);
+ok(count($part['lines']) === 1 && abs($part['lines'][0]['unit_price'] * $part['lines'][0]['quantity'] - 33.33) < 0.011 && $part['lines'][0]['vat_category'] === 'S', 'partial credit note: only the returned line');
+
+$crCalls = []; $crTr = function (string $url, array $h, string $json) use (&$crCalls): array {
+    $crCalls[] = json_decode($json, true);
+    return [200, json_encode(['valid' => true, 'xml' => '<rsm:CrossIndustryInvoice/>', 'pdf_base64' => base64_encode('%PDF'), 'totals' => ['total_with_vat' => 130.9], 'errors' => []])];
+};
+$crOrder = OrderAdapter::fromBestellung(bestellung());
+// option off: nothing happens, no API call
+$stOff = new ArrayStore(); $stOff->save(7, ['valid' => true, 'xml' => '<Invoice/>', 'number' => 'RE-77', 'created' => '2026-11-20T10:00:00+00:00']);
+$off = (new Service(new Api('', 'x', $crTr), $stOff, $cfg))->creditNote($crOrder);
+ok($off['skipped'] && $crCalls === [] && empty($stOff->get(7)['credit_notes']), 'credit notes off by default: skipped, no API call');
+$cfgOn = ['creditNotes' => 'Y', 'zugferd' => 'Y'] + $cfg;
+// no valid original: skipped
+$stNone = new ArrayStore();
+ok((new Service(new Api('', 'x', $crTr), $stNone, $cfgOn))->creditNote($crOrder)['skipped'] && $crCalls === [], 'no valid e-invoice: no credit note');
+// option on: created once, stored with pdf, replay and a second whole-order credit note skipped
+$svcOn = new Service(new Api('', 'x', $crTr), $stOff, $cfgOn);
+$r1 = $svcOn->creditNote($crOrder);
+ok($r1['valid'] && count($crCalls) === 1 && $crCalls[0]['type_code'] === '381' && $crCalls[0]['preceding_invoice'] === 'RE-77' && $crCalls[0]['preceding_invoice_date'] === '2026-11-20' && $crCalls[0]['format'] === 'zugferd', 'credit note created with confirmed API fields');
+$cnList = $stOff->get(7)['credit_notes'];
+ok(count($cnList) === 1 && $cnList[0]['full'] === true && $cnList[0]['pdf'] === base64_encode('%PDF') && $cnList[0]['original'] === 'RE-77', 'credit note stored with PDF');
+ok($svcOn->creditNote($crOrder)['skipped'] && $svcOn->creditNote($crOrder, 'manual-later')['skipped'] && count($crCalls) === 1, 'one whole-order credit note only (replay and second key skipped)');
+ok(!$svcOn->creditNote($crOrder, 'ret-1', [['name' => 'Widget', 'qty' => 1.0, 'unit_net' => 10.0, 'vat_rate' => 19.0, 'type' => 'item']])['skipped'] && count($crCalls) === 2, 'a partial return is its own credit note');
+// API failure stored, not thrown
+$stFail = new ArrayStore(); $stFail->save(7, ['valid' => true, 'xml' => '<Invoice/>', 'number' => 'RE-77']);
+$fl = (new Service(new Api('', 'x', fn () => [503, '{}']), $stFail, $cfgOn))->creditNote($crOrder);
+ok(!$fl['valid'] && $fl['error'] !== '' && $stFail->get(7)['credit_notes'][0]['valid'] === false, 'credit note API failure is stored');
+// generate stores the ZUGFeRD PDF only when the option produced one
+$stG = new ArrayStore();
+(new Service(new Api('', 'x', $crTr), $stG, $cfgOn))->generate($crOrder);
+ok($stG->get(7)['pdf'] === base64_encode('%PDF') && $stG->get(7)['format'] === 'zugferd', 'generate with zugferd stores PDF');
+$stG2 = new ArrayStore();
+(new Service(new Api('', 'x', $crTr), $stG2, $cfg))->generate($crOrder);
+ok($stG2->get(7)['pdf'] === '' && $crCalls[count($crCalls) - 1]['format'] === 'xrechnung', 'generate with defaults: xrechnung, no PDF');
+
 if (getenv('WSEI_LIVE') === '1') {
     $live = (new Service(new Api('', '0.1.0'), new ArrayStore(), $cfg))->generate($order + ['today' => date('Y-m-d')]);
     echo 'LIVE create: valid=' . var_export($live['valid'], true) . ' error=' . $live['error'] . ' errors=' . json_encode($live['errors']) . "\n";

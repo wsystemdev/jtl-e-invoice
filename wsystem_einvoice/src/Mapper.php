@@ -69,6 +69,43 @@ final class Mapper
         return $l;
     }
 
+    /** Format for new documents: the configured one, or zugferd when the option is on (never for Peppol BIS). @param array<string,mixed> $cfg */
+    public static function formatFor(array $cfg): string
+    {
+        $f = (string) ($cfg['format'] ?? '') !== '' ? (string) $cfg['format'] : 'xrechnung';
+        return ($cfg['zugferd'] ?? 'N') === 'Y' && $f !== 'peppol-bis3' ? 'zugferd' : $f;
+    }
+
+    /**
+     * Credit note (type 381) for an order, whole or only $refundLines (same line shape as $order['lines']).
+     * Amounts stay positive; references the original invoice (BT-25 / BT-26).
+     *
+     * @param array<string,mixed> $order
+     * @param array<string,mixed> $cfg
+     * @param array<int,array<string,mixed>>|null $refundLines
+     * @return array<string,mixed>
+     */
+    public static function creditNote(array $order, array $cfg, string $key, string $precedingNumber, string $precedingDate, ?array $refundLines = null): array
+    {
+        if ($refundLines !== null) {
+            $order['lines'] = $refundLines;
+        }
+        $body = self::invoice($order, $cfg);
+        unset($body['prepaid_amount']);
+        $suffix = substr((string) preg_replace('/[^A-Za-z0-9]/', '', $key), -8) ?: '1';
+        $body['invoice_number'] = 'CN-' . (string) $order['number'] . '-' . $suffix;
+        $body['type_code'] = '381';
+        $body['preceding_invoice'] = $precedingNumber;
+        $body['preceding_invoice_date'] = $precedingDate;
+        $body['delivery_date'] = $body['issue_date'];
+        $iban = (string) preg_replace('/\s/', '', (string) ($cfg['sellerIban'] ?? ''));
+        $terms = 'Refund to the original payment method';
+        $body['payment'] = $iban !== ''
+            ? ['means_code' => '58', 'iban' => $iban, 'account_name' => (string) ($cfg['sellerName'] ?? ''), 'reference' => $body['invoice_number'], 'terms' => $terms]
+            : ['means_code' => '1', 'reference' => $body['invoice_number'], 'terms' => $terms];
+        return $body;
+    }
+
     /**
      * @param array<string,mixed> $order Normalised order.
      * @param array<string,mixed> $cfg   Plugin settings.
@@ -184,7 +221,7 @@ final class Mapper
         }
         $today = (string) ($order['today'] ?? date('Y-m-d'));
         $body = [
-            'format' => $format !== '' ? $format : (string) ($cfg['format'] ?? 'xrechnung'),
+            'format' => $format !== '' ? $format : self::formatFor($cfg),
             'invoice_number' => $number,
             'issue_date' => $today,
             'delivery_date' => (string) ($order['delivery_date'] ?? '') !== '' ? (string) $order['delivery_date'] : $today,
