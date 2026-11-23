@@ -21,7 +21,7 @@ JTL-Wawi (1.9.x) already exports XRechnung 3.0.x and ZUGFeRD from its own invoic
 
 ## Requirements
 
-JTL-Shop 5.2.0+, PHP 8.1+, PHP curl extension. No account needed (20 invoices/day without key); optional free API key at https://wsystem.dev/account.
+JTL-Shop 5.2.0+, PHP 8.1+, PHP curl extension. No account needed (20 invoices/day without key); free for 50 invoices a month with a free API key at https://wsystem.dev/account, then from €12 (https://wsystem.dev/online-shops).
 
 ## Install
 
