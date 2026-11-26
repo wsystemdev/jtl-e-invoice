@@ -142,11 +142,18 @@ $g = OrderAdapter::fromBestellung(bestellung(['fGesamtsumme' => 60.86, 'Position
 ok(Mapper::priceMode($g) === 'gross', 'gross price mode detected from fGesamtsumme');
 $gb = Mapper::invoice($g + ['today' => '2026-11-26'], $cfg);
 $by = []; foreach ($gb['lines'] as $l) { $by[(string) $l['vat_rate']] = ($by[(string) $l['vat_rate']] ?? 0) + round($l['quantity'] * $l['unit_price'], 2); }
-ok(abs(round($by['19'], 2) - 25.18) < 0.001 && abs(round($by['7'], 2) - 28.87) < 0.001, 'nets per rate = JTL net (gross - VAT on summed gross) got ' . json_encode($by));
+ok(abs(round($by['19'], 2) - 25.18) < 0.001 && abs(round($by['7'], 2) - 28.88) < 0.001, 'nets per rate = JTL net (19 % unreachable: 7 % net +1 ct so the total holds on APIs without vat_amounts) got ' . json_encode($by));
 $va = []; foreach ($gb['vat_amounts'] ?? [] as $v) { $va[(string) $v['vat_rate']] = $v['tax_amount']; }
 $tot = 0; foreach ($by as $r => $nn) { $nn = round($nn, 2); $tot += $nn + ($va[$r] ?? round($nn * (float) $r / 100, 2)); }
 ok(abs(round($tot, 2) - 60.86) < 0.001, 'e-invoice total = fGesamtsumme 60.86 got ' . $tot);
-ok(($va['19'] ?? null) === 4.79 && !isset($va['7']), 'vat_amounts only where base x rate misses JTL VAT: ' . json_encode($gb['vat_amounts'] ?? null));
+$tot0 = 0; foreach ($by as $r => $nn) { $nn = round($nn, 2); $tot0 += $nn + round($nn * (float) $r / 100, 2); }
+ok(abs(round($tot0, 2) - 60.86) < 0.001, 'PC-4: total = fGesamtsumme also on an API that ignores vat_amounts, got ' . $tot0);
+ok(($va['19'] ?? null) === 4.79 && ($va['7'] ?? null) === 2.01, 'vat_amounts = JTL gross per rate - net sent: ' . json_encode($gb['vat_amounts'] ?? null));
+// PC-5: 40 x 0.01 gross at 19 % (position net 0.01, VAT 0.00 each): VAT 0.00 sent as vat_amounts, nets unchanged
+$cp = []; for ($i = 0; $i < 40; $i++) { $cp[] = (object) ['nPosTyp' => 1, 'cName' => "S$i", 'cArtNr' => '', 'nAnzahl' => 1, 'fPreisEinzelNetto' => 0.01 / 1.19, 'fMwSt' => 19]; }
+$cb = Mapper::invoice(OrderAdapter::fromBestellung(bestellung(['fGesamtsumme' => 0.40, 'Positionen' => $cp])) + ['today' => '2026-11-26'], $cfg);
+$cn = 0; foreach ($cb['lines'] as $l) { $cn += round($l['quantity'] * $l['unit_price'], 2); }
+ok(abs($cn - 0.40) < 0.001 && ($cb['vat_amounts'][0]['tax_amount'] ?? null) === 0.0, 'PC-5 cent lines: nets 0.40, vat_amounts 0.00: ' . json_encode($cb['vat_amounts'] ?? null));
 // single position 9.99 incl. 19 %: unreachable by any net -> vat_amounts 1.60
 $one = OrderAdapter::fromBestellung(bestellung(['fGesamtsumme' => 9.99, 'Positionen' => [(object) ['nPosTyp' => 1, 'cName' => 'Stift', 'cArtNr' => '', 'nAnzahl' => 1, 'fPreisEinzelNetto' => 9.99 / 1.19, 'fMwSt' => 19]]]));
 $ob = Mapper::invoice($one + ['today' => '2026-11-26'], $cfg);

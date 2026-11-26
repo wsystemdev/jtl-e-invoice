@@ -92,10 +92,12 @@ final class Mapper
     }
 
     /**
-     * Gross prices (BET3, "JTL rounding"): per VAT rate, make the nets add up to JTL's net (gross - VAT on the summed gross) by moving
-     * the rounding cent onto the last position of that rate. If base x rate then still misses JTL's VAT by a cent (e.g. 9.99 incl. 19 %),
-     * first try a net within 3 cents that reaches the same gross (works with every API version), else send JTL's VAT per rate as
-     * vat_amounts (used by API versions with vat_amounts support, ignored by older ones).
+     * Gross prices (BET3 / PC-4 / PC-5, "JTL rounding"; same rules as the Shopware plugin's reconcile()). JTL rounds net and gross per
+     * position and shows, per rate, net = sum of position nets, VAT = sum of position gross - that net. If base x rate misses that VAT, first try a net within 3 cents that reaches the same gross (works with every API version). Second pass: if a
+     * rate's gross cannot be reached by any net (e.g. 3 x 9.99 incl. 19 %), shift another rate's net by 1-2 cents so the e-invoice total
+     * equals fGesamtsumme on today's API. vat_amounts then carries, per rate, JTL's gross minus the net sent wherever base x rate misses
+     * it and the difference is within the API's per-line rounding bound (0.005 per line, min 0.01, max 0.99); API versions without
+     * vat_amounts support ignore the field.
      * @param list<array<string,mixed>> $raw
      * @return array{0:list<array<string,mixed>>,1:list<array<string,mixed>>}
      */
@@ -107,38 +109,94 @@ final class Mapper
                 $groups[(string) $l['rate']][] = $i;
             }
         }
-        $va = [];
-        $tol = max(0.01, round(0.005 * count($raw), 2));
+        $gross = [];
+        $target = 0.0;
+        foreach ($raw as $l) {
+            $target += $l['cat'] === 'S' ? $l['gross'] : $l['net'];
+        }
+        $target = round($target, 2);
         foreach ($groups as $rate => $idx) {
             $r = (float) $rate;
-            $gross = 0.0;
-            $net = 0.0;
-            foreach ($idx as $i) {
-                $gross += $raw[$i]['gross'];
-                $net += $raw[$i]['net'];
-            }
-            $gross = round($gross, 2);
-            $vat = round($gross * $r / (100 + $r), 2);
-            $want = round($gross - $vat, 2);
-            $last = end($idx);
-            $raw[$last]['net'] = round($raw[$last]['net'] + $want - round($net, 2), 2);
-            if (abs(round($want * $r / 100, 2) - $vat) < 0.001) {
+            $g = self::gsum($raw, $idx, 'gross');
+            $gross[$rate] = $g;
+            $want = self::gsum($raw, $idx, 'net');
+            $last = self::lastOf($raw, $idx);
+            if (abs(round($want + round($want * $r / 100, 2), 2) - $g) < 0.001) {
                 continue;
             }
             $best = null;
             for ($d = -3; $d <= 3; ++$d) {
                 $n = round($want + $d / 100, 2);
-                if (abs(round($n + round($n * $r / 100, 2), 2) - $gross) < 0.001 && ($best === null || abs($d) < abs($best))) {
+                if (abs(round($n + round($n * $r / 100, 2), 2) - $g) < 0.001 && ($best === null || abs($d) < abs($best))) {
                     $best = $d;
                 }
             }
             if ($best !== null) {
                 $raw[$last]['net'] = round($raw[$last]['net'] + $best / 100, 2);
-            } elseif (abs(round($want * $r / 100, 2) - $vat) <= $tol + 0.0001) {
-                $va[] = ['vat_category' => 'S', 'vat_rate' => $r, 'tax_amount' => $vat];
+            }
+        }
+        if (abs(self::apiTotal($raw) - $target) > 0.001) {
+            foreach ([1, -1, 2, -2] as $d) {
+                foreach ($groups as $idx) {
+                    $k = self::lastOf($raw, $idx);
+                    $try = $raw;
+                    $try[$k]['net'] = round($try[$k]['net'] + $d / 100, 2);
+                    if (abs(self::apiTotal($try) - $target) < 0.001) {
+                        $raw = $try;
+                        break 2;
+                    }
+                }
+            }
+        }
+        $va = [];
+        $tol = min(0.99, max(0.01, round(0.005 * count($raw), 2)));
+        foreach ($groups as $rate => $idx) {
+            $net = self::gsum($raw, $idx, 'net');
+            $charged = round($gross[$rate] - $net, 2);
+            $calc = round($net * (float) $rate / 100, 2);
+            if (abs($charged - $calc) > 0.001 && abs($charged - $calc) <= $tol + 0.0001) {
+                $va[] = ['vat_category' => 'S', 'vat_rate' => (float) $rate, 'tax_amount' => $charged];
             }
         }
         return [$raw, $va];
+    }
+
+    /** @param list<array<string,mixed>> $raw @param list<int> $idx */
+    private static function gsum(array $raw, array $idx, string $f): float
+    {
+        $t = 0.0;
+        foreach ($idx as $i) {
+            $t += $raw[$i][$f];
+        }
+        return round($t, 2);
+    }
+
+    /** Position that absorbs a cent shift: the last quantity-1 position of the rate (keeps unit prices exact), else the last one. @param list<array<string,mixed>> $raw @param list<int> $idx */
+    private static function lastOf(array $raw, array $idx): int
+    {
+        $k = end($idx);
+        foreach ($idx as $i) {
+            if (abs((float) $raw[$i]['qty']) == 1.0) {
+                $k = $i;
+            }
+        }
+        return $k;
+    }
+
+    /** Total the API computes: line nets rounded to cents, VAT per category and rate on the summed net. @param list<array<string,mixed>> $raw */
+    private static function apiTotal(array $raw): float
+    {
+        $by = [];
+        foreach ($raw as $l) {
+            $k = $l['cat'] . '|' . ($l['cat'] === 'S' ? $l['rate'] : 0);
+            $by[$k] = ($by[$k] ?? 0.0) + round($l['net'], 2);
+        }
+        $t = 0.0;
+        foreach ($by as $k => $net) {
+            $net = round($net, 2);
+            $t += $net + round($net * (float) explode('|', (string) $k)[1] / 100, 2);
+        }
+        return round($t, 2);
     }
 
     /** Format for new documents: the configured one, or zugferd when the option is on (never for Peppol BIS). @param array<string,mixed> $cfg */

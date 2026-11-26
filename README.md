@@ -14,7 +14,8 @@ JTL-Wawi (1.9.x) already exports XRechnung 3.0.x and ZUGFeRD from its own invoic
 - Works from **JTL-Shop orders** (Hook 181, status pushed by JTL-Wawi), no template editing.
 
 ## New in 0.2.1
-- Gross prices (customer groups with prices incl. VAT): the e-invoice nets per VAT rate now match JTL's own net (gross minus VAT on the summed gross), so the e-invoice total equals the order total (`fGesamtsumme`) instead of being off by a cent. Where no net amount can reach JTL's VAT (e.g. one item at 9.99 incl. 19 %), JTL's VAT per rate is sent as `vat_amounts`; the W System API uses it once its vat_amounts support is live and ignores it until then.
+- Gross prices (customer groups with prices incl. VAT): the e-invoice nets per VAT rate now match JTL's own net (sum of the rounded position nets; VAT = sum of the rounded position gross minus that net), so the e-invoice total equals the order total (`fGesamtsumme`) instead of being off by a cent. Where no net amount can reach JTL's VAT (e.g. one item at 9.99 incl. 19 %), JTL's VAT per rate is sent as `vat_amounts`; the W System API uses it once its vat_amounts support is live and ignores it until then.
+- If one rate's gross cannot be reached by any net (e.g. 3 × 9.99 incl. 19 %), another rate's net moves by 1–2 cents so the total also matches on API versions without vat_amounts support.
 - Net-priced (B2B) orders are unchanged.
 
 ## New in 0.2.0 (both options OFF by default)
