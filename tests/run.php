@@ -133,6 +133,31 @@ $stG2 = new ArrayStore();
 (new Service(new Api('', 'x', $crTr), $stG2, $cfg))->generate($crOrder);
 ok($stG2->get(7)['pdf'] === '' && $crCalls[count($crCalls) - 1]['format'] === 'xrechnung', 'generate with defaults: xrechnung, no PDF');
 
+// BET3 gross prices ("JTL rounding"): JTL stores the net unit price with full precision and totals the rounded gross positions
+$g = OrderAdapter::fromBestellung(bestellung(['fGesamtsumme' => 60.86, 'Positionen' => [
+    (object) ['nPosTyp' => 1, 'cName' => 'Kugelschreiber', 'cArtNr' => 'K-1', 'nAnzahl' => 3, 'fPreisEinzelNetto' => 9.99 / 1.19, 'fMwSt' => 19],
+    (object) ['nPosTyp' => 1, 'cName' => 'Fachbuch', 'cArtNr' => 'B-1', 'nAnzahl' => 2, 'fPreisEinzelNetto' => 12.95 / 1.07, 'fMwSt' => 7],
+    (object) ['nPosTyp' => 1, 'cName' => 'Kaffee', 'cArtNr' => 'C-1', 'nAnzahl' => 1, 'fPreisEinzelNetto' => 4.99 / 1.07, 'fMwSt' => 7],
+]]));
+ok(Mapper::priceMode($g) === 'gross', 'gross price mode detected from fGesamtsumme');
+$gb = Mapper::invoice($g + ['today' => '2026-11-26'], $cfg);
+$by = []; foreach ($gb['lines'] as $l) { $by[(string) $l['vat_rate']] = ($by[(string) $l['vat_rate']] ?? 0) + round($l['quantity'] * $l['unit_price'], 2); }
+ok(abs(round($by['19'], 2) - 25.18) < 0.001 && abs(round($by['7'], 2) - 28.87) < 0.001, 'nets per rate = JTL net (gross - VAT on summed gross) got ' . json_encode($by));
+$va = []; foreach ($gb['vat_amounts'] ?? [] as $v) { $va[(string) $v['vat_rate']] = $v['tax_amount']; }
+$tot = 0; foreach ($by as $r => $nn) { $nn = round($nn, 2); $tot += $nn + ($va[$r] ?? round($nn * (float) $r / 100, 2)); }
+ok(abs(round($tot, 2) - 60.86) < 0.001, 'e-invoice total = fGesamtsumme 60.86 got ' . $tot);
+ok(($va['19'] ?? null) === 4.79 && !isset($va['7']), 'vat_amounts only where base x rate misses JTL VAT: ' . json_encode($gb['vat_amounts'] ?? null));
+// single position 9.99 incl. 19 %: unreachable by any net -> vat_amounts 1.60
+$one = OrderAdapter::fromBestellung(bestellung(['fGesamtsumme' => 9.99, 'Positionen' => [(object) ['nPosTyp' => 1, 'cName' => 'Stift', 'cArtNr' => '', 'nAnzahl' => 1, 'fPreisEinzelNetto' => 9.99 / 1.19, 'fMwSt' => 19]]]));
+$ob = Mapper::invoice($one + ['today' => '2026-11-26'], $cfg);
+ok(($ob['vat_amounts'][0]['tax_amount'] ?? null) === 1.6 && $ob['lines'][0]['unit_price'] == 8.39, '9.99 gross -> net 8.39 + vat_amounts 1.60');
+// net-priced B2B order stays as before (no vat_amounts, no shifts)
+$nb = Mapper::invoice($order + ['today' => '2026-11-21'], $cfg);
+ok(Mapper::priceMode($order) === 'net' && !isset($nb['vat_amounts']), 'net order: no vat_amounts');
+// partial credit note keeps the gross mode of the original order
+$cn = Mapper::creditNote($g + ['today' => '2026-11-26'], $cfg, 'retoure-1', 'JTL-1', '2026-11-24', [['name' => 'Kugelschreiber', 'sku' => 'K-1', 'qty' => 1.0, 'unit_net' => 9.99 / 1.19, 'vat_rate' => 19.0, 'type' => 'item']]);
+ok(($cn['vat_amounts'][0]['tax_amount'] ?? null) === 1.6 && $cn['type_code'] === '381', 'partial credit note 9.99 gross -> vat_amounts 1.60');
+
 if (getenv('WSEI_LIVE') === '1') {
     $live = (new Service(new Api('', '0.1.0'), new ArrayStore(), $cfg))->generate($order + ['today' => date('Y-m-d')]);
     echo 'LIVE create: valid=' . var_export($live['valid'], true) . ' error=' . $live['error'] . ' errors=' . json_encode($live['errors']) . "\n";

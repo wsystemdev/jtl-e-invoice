@@ -69,6 +69,78 @@ final class Mapper
         return $l;
     }
 
+    /**
+     * 'gross' when the shop priced this order incl. VAT (JTL customer group with gross prices): the order total fGesamtsumme equals the
+     * sum of the rounded gross positions. Then JTL's VAT per rate is computed on the summed gross, not on the summed net.
+     * @param array<string,mixed> $order
+     */
+    public static function priceMode(array $order): string
+    {
+        $g = 0.0;
+        $n = [];
+        foreach ($order['lines'] as $p) {
+            $r = (float) $p['vat_rate'];
+            $g += round((float) $p['qty'] * (float) $p['unit_net'] * (1 + $r / 100), 2);
+            $n[(string) $r] = ($n[(string) $r] ?? 0.0) + round((float) $p['qty'] * (float) $p['unit_net'], 2);
+        }
+        $net = 0.0;
+        foreach ($n as $r => $v) {
+            $net += round($v, 2) + round($v * (float) $r / 100, 2);
+        }
+        $t = round((float) ($order['total'] ?? 0), 2);
+        return abs(round($g, 2) - $t) < 0.005 && abs(round($net, 2) - $t) >= 0.005 ? 'gross' : 'net';
+    }
+
+    /**
+     * Gross prices (BET3, "JTL rounding"): per VAT rate, make the nets add up to JTL's net (gross - VAT on the summed gross) by moving
+     * the rounding cent onto the last position of that rate. If base x rate then still misses JTL's VAT by a cent (e.g. 9.99 incl. 19 %),
+     * first try a net within 3 cents that reaches the same gross (works with every API version), else send JTL's VAT per rate as
+     * vat_amounts (used by API versions with vat_amounts support, ignored by older ones).
+     * @param list<array<string,mixed>> $raw
+     * @return array{0:list<array<string,mixed>>,1:list<array<string,mixed>>}
+     */
+    private static function reconcileGross(array $raw): array
+    {
+        $groups = [];
+        foreach ($raw as $i => $l) {
+            if ($l['cat'] === 'S') {
+                $groups[(string) $l['rate']][] = $i;
+            }
+        }
+        $va = [];
+        $tol = max(0.01, round(0.005 * count($raw), 2));
+        foreach ($groups as $rate => $idx) {
+            $r = (float) $rate;
+            $gross = 0.0;
+            $net = 0.0;
+            foreach ($idx as $i) {
+                $gross += $raw[$i]['gross'];
+                $net += $raw[$i]['net'];
+            }
+            $gross = round($gross, 2);
+            $vat = round($gross * $r / (100 + $r), 2);
+            $want = round($gross - $vat, 2);
+            $last = end($idx);
+            $raw[$last]['net'] = round($raw[$last]['net'] + $want - round($net, 2), 2);
+            if (abs(round($want * $r / 100, 2) - $vat) < 0.001) {
+                continue;
+            }
+            $best = null;
+            for ($d = -3; $d <= 3; ++$d) {
+                $n = round($want + $d / 100, 2);
+                if (abs(round($n + round($n * $r / 100, 2), 2) - $gross) < 0.001 && ($best === null || abs($d) < abs($best))) {
+                    $best = $d;
+                }
+            }
+            if ($best !== null) {
+                $raw[$last]['net'] = round($raw[$last]['net'] + $best / 100, 2);
+            } elseif (abs(round($want * $r / 100, 2) - $vat) <= $tol + 0.0001) {
+                $va[] = ['vat_category' => 'S', 'vat_rate' => $r, 'tax_amount' => $vat];
+            }
+        }
+        return [$raw, $va];
+    }
+
     /** Format for new documents: the configured one, or zugferd when the option is on (never for Peppol BIS). @param array<string,mixed> $cfg */
     public static function formatFor(array $cfg): string
     {
@@ -87,6 +159,7 @@ final class Mapper
      */
     public static function creditNote(array $order, array $cfg, string $key, string $precedingNumber, string $precedingDate, ?array $refundLines = null): array
     {
+        $order['price_mode'] = $order['price_mode'] ?? self::priceMode($order);
         if ($refundLines !== null) {
             $order['lines'] = $refundLines;
         }
@@ -128,7 +201,7 @@ final class Mapper
             $zero = 'AE';
         }
 
-        $lines = [];
+        $raw = [];
         foreach ($order['lines'] as $p) {
             $qty = (float) $p['qty'];
             $net = round($qty * (float) $p['unit_net'], 2);
@@ -141,7 +214,16 @@ final class Mapper
                 $cat = 'E';
                 $rate = 0.0;
             }
-            $lines[] = self::line((string) $p['name'], ($p['type'] ?? '') === 'item' ? $qty : 1.0, $net, $cat, $rate, (string) ($p['sku'] ?? ''));
+            $raw[] = ['name' => (string) $p['name'], 'qty' => ($p['type'] ?? '') === 'item' ? $qty : 1.0, 'net' => $net, 'cat' => $cat, 'rate' => $rate, 'sku' => (string) ($p['sku'] ?? ''),
+                'gross' => round($qty * (float) $p['unit_net'] * (1 + $rate / 100), 2)];
+        }
+        $vatAmounts = [];
+        if (!$small && ($order['price_mode'] ?? self::priceMode($order)) === 'gross') {
+            [$raw, $vatAmounts] = self::reconcileGross($raw);
+        }
+        $lines = [];
+        foreach ($raw as $r) {
+            $lines[] = self::line($r['name'], $r['qty'], $r['net'], $r['cat'], $r['rate'], $r['sku']);
         }
 
         $name = trim(trim((string) ($b['first'] ?? '')) . ' ' . trim((string) ($b['last'] ?? '')));
@@ -233,6 +315,9 @@ final class Mapper
             'lines' => $lines,
             'payment' => $payment,
         ];
+        if ($vatAmounts !== []) {
+            $body['vat_amounts'] = $vatAmounts;
+        }
         if ($paid) {
             $body['prepaid_amount'] = round((float) $order['total'], 2);
         }
