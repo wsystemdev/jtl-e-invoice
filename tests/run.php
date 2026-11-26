@@ -166,6 +166,10 @@ $cn = Mapper::creditNote($g + ['today' => '2026-11-26'], $cfg, 'retoure-1', 'JTL
 ok(($cn['vat_amounts'][0]['tax_amount'] ?? null) === 1.6 && $cn['type_code'] === '381', 'partial credit note 9.99 gross -> vat_amounts 1.60');
 
 if (getenv('WSEI_LIVE') === '1') {
+    $deny = dirname(__DIR__, 3) . '/deny_prod.php';
+    if (!is_file($deny)) { $deny = '/workspace/growth/bets/deny_prod.php'; }
+    require_once $deny;
+    wsystem_require_allow_prod('https://api.wsystem.dev/einvoice/create', 'JTL tests/run.php WSEI_LIVE=1');
     $live = (new Service(new Api('', '0.1.0'), new ArrayStore(), $cfg))->generate($order + ['today' => date('Y-m-d')]);
     echo 'LIVE create: valid=' . var_export($live['valid'], true) . ' error=' . $live['error'] . ' errors=' . json_encode($live['errors']) . "\n";
     ok($live['error'] === '' && $live['valid'], 'live API accepts mapped JTL order and it validates');
