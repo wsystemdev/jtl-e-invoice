@@ -13,9 +13,15 @@ JTL-Wawi (1.9.x) already exports XRechnung 3.0.x and ZUGFeRD from its own invoic
 - **Counterparty checks on received invoices** (`POST /einvoice/check`): paste or upload a supplier XML in the admin and get a verdict (rules, VIES name match, sanctions, totals, IBAN, duplicates, bank-detail changes).
 - Works from **JTL-Shop orders** (Hook 181, status pushed by JTL-Wawi), no template editing.
 
+## New in 0.2.1
+
+- Gross prices (customer groups with prices incl. VAT): the e-invoice nets per VAT rate now match JTL's own net (sum of the rounded position nets; VAT = sum of the rounded position gross minus that net), so the e-invoice total equals the order total (`fGesamtsumme`) instead of being off by a cent. Where no net amount can reach JTL's VAT (e.g. one item at 9.99 incl. 19 %), JTL's VAT per rate is sent as `vat_amounts`; the W System API uses it once its vat_amounts support is live and ignores it until then.
+- If one rate's gross cannot be reached by any net (e.g. 3 × 9.99 incl. 19 %), another rate's net moves by 1–2 cents so the total also matches on API versions without vat_amounts support.
+- Net-priced (B2B) orders are unchanged.
+
 ## Requirements
 
-JTL-Shop 5.2.0+, PHP 8.1+, PHP curl extension. No account needed (20 invoices/day without key); optional free API key at https://wsystem.dev/account.
+JTL-Shop 5.2.0+, PHP 8.1+, PHP curl extension. No account needed (20 invoices/day without key); free for 50 invoices a month with a free API key at https://wsystem.dev/account, then from €12 (https://wsystem.dev/online-shops).
 
 ## Install
 
@@ -30,7 +36,7 @@ On creation the order's invoice data goes to `https://api.wsystem.dev/einvoice/c
 
 ## Status
 
-Version 0.1.0. The order mapping and API logic are unit tested (`php tests/run.php`) and the request shape is the same as the W System WooCommerce plugin. It has been written against the JTL-Shop 5 plugin API and the `Bestellung` object, but not yet run inside a live JTL-Shop: please report problems. Not in this version: attaching the XML to JTL-Shop emails, ZUGFeRD PDF output, credit notes.
+Version 0.2.1. Fixes only: gross-price rounding and `vat_amounts` (see above). The order mapping and API logic are unit tested (`php tests/run.php`) and the request shape is the same as the W System WooCommerce plugin. It has been written against the JTL-Shop 5 plugin API and the `Bestellung` object, but not yet run inside a live JTL-Shop: please report problems. Not in this version: attaching the XML to JTL-Shop emails, ZUGFeRD PDF output, credit notes. Those features live on the `jtl-zugferd-credit-notes` branch (also `bet3-gross-rounding`) for a later release, after a run on a real local JTL-Shop.
 
 ## Deutsch
 

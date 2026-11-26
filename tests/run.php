@@ -82,7 +82,40 @@ ok(!(new Service(new Api('', 'x', fn () => [200, '{}']), $st, $cfg))->generate([
 $net = (new Service(new Api('', 'x', function () { throw new RuntimeException('boom'); }), $st, $cfg))->generate($order);
 ok($net['error'] === 'boom', 'network error');
 
+// BET3 gross prices ("JTL rounding"): JTL stores the net unit price with full precision and totals the rounded gross positions
+$g = OrderAdapter::fromBestellung(bestellung(['fGesamtsumme' => 60.86, 'Positionen' => [
+    (object) ['nPosTyp' => 1, 'cName' => 'Kugelschreiber', 'cArtNr' => 'K-1', 'nAnzahl' => 3, 'fPreisEinzelNetto' => 9.99 / 1.19, 'fMwSt' => 19],
+    (object) ['nPosTyp' => 1, 'cName' => 'Fachbuch', 'cArtNr' => 'B-1', 'nAnzahl' => 2, 'fPreisEinzelNetto' => 12.95 / 1.07, 'fMwSt' => 7],
+    (object) ['nPosTyp' => 1, 'cName' => 'Kaffee', 'cArtNr' => 'C-1', 'nAnzahl' => 1, 'fPreisEinzelNetto' => 4.99 / 1.07, 'fMwSt' => 7],
+]]));
+ok(Mapper::priceMode($g) === 'gross', 'gross price mode detected from fGesamtsumme');
+$gb = Mapper::invoice($g + ['today' => '2026-11-26'], $cfg);
+$by = []; foreach ($gb['lines'] as $l) { $by[(string) $l['vat_rate']] = ($by[(string) $l['vat_rate']] ?? 0) + round($l['quantity'] * $l['unit_price'], 2); }
+ok(abs(round($by['19'], 2) - 25.18) < 0.001 && abs(round($by['7'], 2) - 28.88) < 0.001, 'nets per rate = JTL net (19 % unreachable: 7 % net +1 ct so the total holds on APIs without vat_amounts) got ' . json_encode($by));
+$va = []; foreach ($gb['vat_amounts'] ?? [] as $v) { $va[(string) $v['vat_rate']] = $v['tax_amount']; }
+$tot = 0; foreach ($by as $r => $nn) { $nn = round($nn, 2); $tot += $nn + ($va[$r] ?? round($nn * (float) $r / 100, 2)); }
+ok(abs(round($tot, 2) - 60.86) < 0.001, 'e-invoice total = fGesamtsumme 60.86 got ' . $tot);
+$tot0 = 0; foreach ($by as $r => $nn) { $nn = round($nn, 2); $tot0 += $nn + round($nn * (float) $r / 100, 2); }
+ok(abs(round($tot0, 2) - 60.86) < 0.001, 'PC-4: total = fGesamtsumme also on an API that ignores vat_amounts, got ' . $tot0);
+ok(($va['19'] ?? null) === 4.79 && ($va['7'] ?? null) === 2.01, 'vat_amounts = JTL gross per rate - net sent: ' . json_encode($gb['vat_amounts'] ?? null));
+// PC-5: 40 x 0.01 gross at 19 % (position net 0.01, VAT 0.00 each): VAT 0.00 sent as vat_amounts, nets unchanged
+$cp = []; for ($i = 0; $i < 40; $i++) { $cp[] = (object) ['nPosTyp' => 1, 'cName' => "S$i", 'cArtNr' => '', 'nAnzahl' => 1, 'fPreisEinzelNetto' => 0.01 / 1.19, 'fMwSt' => 19]; }
+$cb = Mapper::invoice(OrderAdapter::fromBestellung(bestellung(['fGesamtsumme' => 0.40, 'Positionen' => $cp])) + ['today' => '2026-11-26'], $cfg);
+$cnet = 0; foreach ($cb['lines'] as $l) { $cnet += round($l['quantity'] * $l['unit_price'], 2); }
+ok(abs($cnet - 0.40) < 0.001 && ($cb['vat_amounts'][0]['tax_amount'] ?? null) === 0.0, 'PC-5 cent lines: nets 0.40, vat_amounts 0.00: ' . json_encode($cb['vat_amounts'] ?? null));
+// single position 9.99 incl. 19 %: unreachable by any net -> vat_amounts 1.60
+$one = OrderAdapter::fromBestellung(bestellung(['fGesamtsumme' => 9.99, 'Positionen' => [(object) ['nPosTyp' => 1, 'cName' => 'Stift', 'cArtNr' => '', 'nAnzahl' => 1, 'fPreisEinzelNetto' => 9.99 / 1.19, 'fMwSt' => 19]]]));
+$ob = Mapper::invoice($one + ['today' => '2026-11-26'], $cfg);
+ok(($ob['vat_amounts'][0]['tax_amount'] ?? null) === 1.6 && $ob['lines'][0]['unit_price'] == 8.39, '9.99 gross -> net 8.39 + vat_amounts 1.60');
+// net-priced B2B order stays as before (no vat_amounts, no shifts)
+$nb = Mapper::invoice($order + ['today' => '2026-11-21'], $cfg);
+ok(Mapper::priceMode($order) === 'net' && !isset($nb['vat_amounts']), 'net order: no vat_amounts');
+
 if (getenv('WSEI_LIVE') === '1') {
+    $deny = dirname(__DIR__, 3) . '/deny_prod.php';
+    if (!is_file($deny)) { $deny = '/workspace/growth/bets/deny_prod.php'; }
+    require_once $deny;
+    wsystem_require_allow_prod('https://api.wsystem.dev/einvoice/create', 'JTL tests/run.php WSEI_LIVE=1');
     $live = (new Service(new Api('', '0.1.0'), new ArrayStore(), $cfg))->generate($order + ['today' => date('Y-m-d')]);
     echo 'LIVE create: valid=' . var_export($live['valid'], true) . ' error=' . $live['error'] . ' errors=' . json_encode($live['errors']) . "\n";
     ok($live['error'] === '' && $live['valid'], 'live API accepts mapped JTL order and it validates');

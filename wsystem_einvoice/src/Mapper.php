@@ -70,6 +70,136 @@ final class Mapper
     }
 
     /**
+     * 'gross' when the shop priced this order incl. VAT (JTL customer group with gross prices): the order total fGesamtsumme equals the
+     * sum of the rounded gross positions. Then JTL's VAT per rate is computed on the summed gross, not on the summed net.
+     * @param array<string,mixed> $order
+     */
+    public static function priceMode(array $order): string
+    {
+        $g = 0.0;
+        $n = [];
+        foreach ($order['lines'] as $p) {
+            $r = (float) $p['vat_rate'];
+            $g += round((float) $p['qty'] * (float) $p['unit_net'] * (1 + $r / 100), 2);
+            $n[(string) $r] = ($n[(string) $r] ?? 0.0) + round((float) $p['qty'] * (float) $p['unit_net'], 2);
+        }
+        $net = 0.0;
+        foreach ($n as $r => $v) {
+            $net += round($v, 2) + round($v * (float) $r / 100, 2);
+        }
+        $t = round((float) ($order['total'] ?? 0), 2);
+        return abs(round($g, 2) - $t) < 0.005 && abs(round($net, 2) - $t) >= 0.005 ? 'gross' : 'net';
+    }
+
+    /**
+     * Gross prices (BET3 / PC-4 / PC-5, "JTL rounding"; same rules as the Shopware plugin's reconcile()). JTL rounds net and gross per
+     * position and shows, per rate, net = sum of position nets, VAT = sum of position gross - that net. If base x rate misses that VAT, first try a net within 3 cents that reaches the same gross (works with every API version). Second pass: if a
+     * rate's gross cannot be reached by any net (e.g. 3 x 9.99 incl. 19 %), shift another rate's net by 1-2 cents so the e-invoice total
+     * equals fGesamtsumme on today's API. vat_amounts then carries, per rate, JTL's gross minus the net sent wherever base x rate misses
+     * it and the difference is within the API's per-line rounding bound (0.005 per line, min 0.01, max 0.99); API versions without
+     * vat_amounts support ignore the field.
+     * @param list<array<string,mixed>> $raw
+     * @return array{0:list<array<string,mixed>>,1:list<array<string,mixed>>}
+     */
+    private static function reconcileGross(array $raw): array
+    {
+        $groups = [];
+        foreach ($raw as $i => $l) {
+            if ($l['cat'] === 'S') {
+                $groups[(string) $l['rate']][] = $i;
+            }
+        }
+        $gross = [];
+        $target = 0.0;
+        foreach ($raw as $l) {
+            $target += $l['cat'] === 'S' ? $l['gross'] : $l['net'];
+        }
+        $target = round($target, 2);
+        foreach ($groups as $rate => $idx) {
+            $r = (float) $rate;
+            $g = self::gsum($raw, $idx, 'gross');
+            $gross[$rate] = $g;
+            $want = self::gsum($raw, $idx, 'net');
+            $last = self::lastOf($raw, $idx);
+            if (abs(round($want + round($want * $r / 100, 2), 2) - $g) < 0.001) {
+                continue;
+            }
+            $best = null;
+            for ($d = -3; $d <= 3; ++$d) {
+                $n = round($want + $d / 100, 2);
+                if (abs(round($n + round($n * $r / 100, 2), 2) - $g) < 0.001 && ($best === null || abs($d) < abs($best))) {
+                    $best = $d;
+                }
+            }
+            if ($best !== null) {
+                $raw[$last]['net'] = round($raw[$last]['net'] + $best / 100, 2);
+            }
+        }
+        if (abs(self::apiTotal($raw) - $target) > 0.001) {
+            foreach ([1, -1, 2, -2] as $d) {
+                foreach ($groups as $idx) {
+                    $k = self::lastOf($raw, $idx);
+                    $try = $raw;
+                    $try[$k]['net'] = round($try[$k]['net'] + $d / 100, 2);
+                    if (abs(self::apiTotal($try) - $target) < 0.001) {
+                        $raw = $try;
+                        break 2;
+                    }
+                }
+            }
+        }
+        $va = [];
+        $tol = min(0.99, max(0.01, round(0.005 * count($raw), 2)));
+        foreach ($groups as $rate => $idx) {
+            $net = self::gsum($raw, $idx, 'net');
+            $charged = round($gross[$rate] - $net, 2);
+            $calc = round($net * (float) $rate / 100, 2);
+            if (abs($charged - $calc) > 0.001 && abs($charged - $calc) <= $tol + 0.0001) {
+                $va[] = ['vat_category' => 'S', 'vat_rate' => (float) $rate, 'tax_amount' => $charged];
+            }
+        }
+        return [$raw, $va];
+    }
+
+    /** @param list<array<string,mixed>> $raw @param list<int> $idx */
+    private static function gsum(array $raw, array $idx, string $f): float
+    {
+        $t = 0.0;
+        foreach ($idx as $i) {
+            $t += $raw[$i][$f];
+        }
+        return round($t, 2);
+    }
+
+    /** Position that absorbs a cent shift: the last quantity-1 position of the rate (keeps unit prices exact), else the last one. @param list<array<string,mixed>> $raw @param list<int> $idx */
+    private static function lastOf(array $raw, array $idx): int
+    {
+        $k = end($idx);
+        foreach ($idx as $i) {
+            if (abs((float) $raw[$i]['qty']) == 1.0) {
+                $k = $i;
+            }
+        }
+        return $k;
+    }
+
+    /** Total the API computes: line nets rounded to cents, VAT per category and rate on the summed net. @param list<array<string,mixed>> $raw */
+    private static function apiTotal(array $raw): float
+    {
+        $by = [];
+        foreach ($raw as $l) {
+            $k = $l['cat'] . '|' . ($l['cat'] === 'S' ? $l['rate'] : 0);
+            $by[$k] = ($by[$k] ?? 0.0) + round($l['net'], 2);
+        }
+        $t = 0.0;
+        foreach ($by as $k => $net) {
+            $net = round($net, 2);
+            $t += $net + round($net * (float) explode('|', (string) $k)[1] / 100, 2);
+        }
+        return round($t, 2);
+    }
+
+    /**
      * @param array<string,mixed> $order Normalised order.
      * @param array<string,mixed> $cfg   Plugin settings.
      * @return array<string,mixed>
@@ -91,7 +221,7 @@ final class Mapper
             $zero = 'AE';
         }
 
-        $lines = [];
+        $raw = [];
         foreach ($order['lines'] as $p) {
             $qty = (float) $p['qty'];
             $net = round($qty * (float) $p['unit_net'], 2);
@@ -104,7 +234,16 @@ final class Mapper
                 $cat = 'E';
                 $rate = 0.0;
             }
-            $lines[] = self::line((string) $p['name'], ($p['type'] ?? '') === 'item' ? $qty : 1.0, $net, $cat, $rate, (string) ($p['sku'] ?? ''));
+            $raw[] = ['name' => (string) $p['name'], 'qty' => ($p['type'] ?? '') === 'item' ? $qty : 1.0, 'net' => $net, 'cat' => $cat, 'rate' => $rate, 'sku' => (string) ($p['sku'] ?? ''),
+                'gross' => round($qty * (float) $p['unit_net'] * (1 + $rate / 100), 2)];
+        }
+        $vatAmounts = [];
+        if (!$small && ($order['price_mode'] ?? self::priceMode($order)) === 'gross') {
+            [$raw, $vatAmounts] = self::reconcileGross($raw);
+        }
+        $lines = [];
+        foreach ($raw as $r) {
+            $lines[] = self::line($r['name'], $r['qty'], $r['net'], $r['cat'], $r['rate'], $r['sku']);
         }
 
         $name = trim(trim((string) ($b['first'] ?? '')) . ' ' . trim((string) ($b['last'] ?? '')));
@@ -196,6 +335,9 @@ final class Mapper
             'lines' => $lines,
             'payment' => $payment,
         ];
+        if ($vatAmounts !== []) {
+            $body['vat_amounts'] = $vatAmounts;
+        }
         if ($paid) {
             $body['prepaid_amount'] = round((float) $order['total'], 2);
         }
