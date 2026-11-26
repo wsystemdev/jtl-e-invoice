@@ -217,10 +217,19 @@ final class Mapper
      */
     public static function creditNote(array $order, array $cfg, string $key, string $precedingNumber, string $precedingDate, ?array $refundLines = null): array
     {
-        $order['price_mode'] = $order['price_mode'] ?? self::priceMode($order);
         if ($refundLines !== null) {
             $order['lines'] = $refundLines;
+            // PC-7: priceMode must run on the refunded positions and their total, not the full order.
+            // (A mixed-rate partial refund of a gross-priced order is classified gross only against the
+            // refund total; against the original fGesamtsumme it looks like a net order and skips reconcile.)
+            $t = 0.0;
+            foreach ($refundLines as $p) {
+                $t += round(round((float) $p['unit_net'] * (1 + (float) $p['vat_rate'] / 100), 2) * (float) $p['qty'], 2);
+            }
+            $order['total'] = round($t, 2);
+            unset($order['price_mode']);
         }
+        $order['price_mode'] = $order['price_mode'] ?? self::priceMode($order);
         $body = self::invoice($order, $cfg);
         unset($body['prepaid_amount']);
         $suffix = substr((string) preg_replace('/[^A-Za-z0-9]/', '', $key), -8) ?: '1';

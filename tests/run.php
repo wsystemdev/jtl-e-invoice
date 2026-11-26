@@ -164,6 +164,16 @@ ok(Mapper::priceMode($order) === 'net' && !isset($nb['vat_amounts']), 'net order
 // partial credit note keeps the gross mode of the original order
 $cn = Mapper::creditNote($g + ['today' => '2026-11-26'], $cfg, 'retoure-1', 'JTL-1', '2026-11-24', [['name' => 'Kugelschreiber', 'sku' => 'K-1', 'qty' => 1.0, 'unit_net' => 9.99 / 1.19, 'vat_rate' => 19.0, 'type' => 'item']]);
 ok(($cn['vat_amounts'][0]['tax_amount'] ?? null) === 1.6 && $cn['type_code'] === '381', 'partial credit note 9.99 gross -> vat_amounts 1.60');
+// PC-7: mixed-rate partial refund of a gross-price order is priced on the refund, not the full order
+$cnMix = Mapper::creditNote($g + ['today' => '2026-11-26'], $cfg, 'retoure-mix', 'JTL-1', '2026-11-24', [
+    ['name' => 'Kugelschreiber', 'sku' => 'K-1', 'qty' => 1.0, 'unit_net' => 9.99 / 1.19, 'vat_rate' => 19.0, 'type' => 'item'],
+    ['name' => 'Fachbuch', 'sku' => 'B-1', 'qty' => 1.0, 'unit_net' => 12.95 / 1.07, 'vat_rate' => 7.0, 'type' => 'item'],
+]);
+$cnTot = 0; $cnBy = []; foreach ($cnMix['lines'] as $l) { $nn = round($l['quantity'] * $l['unit_price'], 2); $cnBy[(string) $l['vat_rate']] = ($cnBy[(string) $l['vat_rate']] ?? 0) + $nn; }
+$cnVa = []; foreach ($cnMix['vat_amounts'] ?? [] as $v) { $cnVa[(string) $v['vat_rate']] = $v['tax_amount']; }
+foreach ($cnBy as $r => $nn) { $nn = round($nn, 2); $cnTot += $nn + ($cnVa[$r] ?? round($nn * (float) $r / 100, 2)); }
+ok(abs(round($cnTot, 2) - 22.94) < 0.001, 'PC-7 mixed partial credit = 9.99+12.95=22.94 got ' . $cnTot);
+
 
 if (getenv('WSEI_LIVE') === '1') {
     $deny = dirname(__DIR__, 3) . '/deny_prod.php';
