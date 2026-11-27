@@ -13,6 +13,10 @@ JTL-Wawi (1.9.x) already exports XRechnung 3.0.x and ZUGFeRD from its own invoic
 - **Counterparty checks on received invoices** (`POST /einvoice/check`): paste or upload a supplier XML in the admin and get a verdict (rules, VIES name match, sanctions, totals, IBAN, duplicates, bank-detail changes).
 - Works from **JTL-Shop orders** (Hook 181, status pushed by JTL-Wawi), no template editing.
 
+## New in 0.2.2
+- Gross-priced mixed-rate credit notes / partial refunds are priced on the refunded positions, not the full order, so the credit-note total matches the refund.
+- **This version has not been tested on a real JTL-Shop yet** (unit tests and API conformance / fuzz only).
+
 ## New in 0.2.1
 - Gross prices (customer groups with prices incl. VAT): the e-invoice nets per VAT rate now match JTL's own net (sum of the rounded position nets; VAT = sum of the rounded position gross minus that net), so the e-invoice total equals the order total (`fGesamtsumme`) instead of being off by a cent. Where no net amount can reach JTL's VAT (e.g. one item at 9.99 incl. 19 %), JTL's VAT per rate is sent as `vat_amounts`; the W System API uses it once its vat_amounts support is live and ignores it until then.
 - If one rate's gross cannot be reached by any net (e.g. 3 × 9.99 incl. 19 %), another rate's net moves by 1–2 cents so the total also matches on API versions without vat_amounts support.
@@ -41,7 +45,7 @@ On creation the order's invoice data goes to `https://api.wsystem.dev/einvoice/c
 
 ## Status
 
-Version 0.2.0. **Credit notes and ZUGFeRD are only unit-tested** (no JTL-Shop was available): the mapping, the stored records, the API request shape (checked against the real W System API logic) and the on/off behaviour are tested with `php tests/run.php`; the Hook 181 status -1 handling, the admin tab buttons and downloads, and the settings screen have never run inside a real JTL-Shop. Version 0.1.0 was likewise unit-tested only. The order mapping and API logic are unit tested (`php tests/run.php`) and the request shape is the same as the W System WooCommerce plugin. It has been written against the JTL-Shop 5 plugin API and the `Bestellung` object, but not yet run inside a live JTL-Shop: please report problems. Not in this version: attaching the XML to JTL-Shop emails, ZUGFeRD PDF output, credit notes.
+Version 0.2.2. **This version has not been tested on a real JTL-Shop yet.** Credit notes and ZUGFeRD are only unit-tested (no JTL-Shop was available): the mapping, the stored records, the API request shape (checked against the real W System API logic) and the on/off behaviour are tested with `php tests/run.php`; the Hook 181 status -1 handling, the admin tab buttons and downloads, and the settings screen have never run inside a real JTL-Shop. Version 0.1.0 was likewise unit-tested only. The order mapping and API logic are unit tested (`php tests/run.php`) and the request shape is the same as the W System WooCommerce plugin. It has been written against the JTL-Shop 5 plugin API and the `Bestellung` object, but not yet run inside a live JTL-Shop: please report problems. ZUGFeRD / Factur-X PDF and credit notes are included and off by default; they have not been run in a real JTL-Shop. Not in this version: attaching the XML to JTL-Shop emails.
 
 ## Deutsch
 
